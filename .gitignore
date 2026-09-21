@@ -1,0 +1,21 @@
+# Build artifacts
+/build/
+sdkconfig
+sdkconfig.old
+sdkconfig.bak*
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# Reference clone (read-only baseline, not part of build)
+.reference/
+# Agent / session memory
+.workbuddy/
+
+# Python virtual env (tools/.venv: ~1997 files, MUST NOT be committed)
+tools/.venv/
+
+# ESP-IDF managed components (regenerated from dependencies.lock)
+managed_components/
