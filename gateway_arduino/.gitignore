@@ -1,0 +1,8 @@
+﻿.pio/
+.vscode/
+.pioenvs/
+*.o
+*.elf
+
+# 真凭据配置（禁止入库）
+src/SecretConfig.h

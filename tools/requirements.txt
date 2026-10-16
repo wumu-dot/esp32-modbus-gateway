@@ -1,0 +1,12 @@
+# 验证体系运行时依赖（安装到独立 virtualenv，不污染 ESP-IDF 环境）
+# 安装:
+#   python -m venv .venv
+#   .venv\Scripts\activate
+#   pip install -r requirements.txt
+#
+# 说明:
+#   - pymodbus: 从站 RTU 服务 + 自测客户端
+#   - pytest:   离线单测 + (接入真板时的) pytest-embedded 前置
+#   - pytest-embedded: 需真板烧录时再加（本目录 top-level VALIDATION.md 的 t5/pytest_gw.py）
+pymodbus>=3.6
+pytest>=8.0
