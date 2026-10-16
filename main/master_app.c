@@ -92,6 +92,7 @@ static void *master_get_param_data(const mb_parameter_descriptor_t *param_descri
 /* ------------------------------------------------------------------ */
 /* 轮询任务：唯一任务独占主站 API（GW-04），周期读取 5×Holding 并打印  */
 /* ------------------------------------------------------------------ */
+
 static void master_poll_task(void *arg)
 {
     (void)arg;

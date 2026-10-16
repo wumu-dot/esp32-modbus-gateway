@@ -49,7 +49,7 @@ menu "ESP32 Modbus Gateway Configuration"
         range 0 34 if IDF_TARGET_ESP32
         default 19 if IDF_TARGET_ESP32
         range 0 48 if IDF_TARGET_ESP32S3
-        default 19 if IDF_TARGET_ESP32S3
+        default 10 if IDF_TARGET_ESP32S3
         help
             GPIO number for UART RTS pin. Connected to ~RE/DE of RS485
             transceiver (MAX3485). RS485 half-duplex direction is driven
