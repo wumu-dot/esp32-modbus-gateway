@@ -23,8 +23,29 @@
 /* ---- 从站地址（SoundDog 0x01）绝对常量 ---- */
 #define SD_DEVICE_ADDR          (0x01u)
 
-/* ---- 数据字典参数个数（5×Holding） ---- */
+/* ---- 从站保持寄存器个数（5×Holding） ---- */
 #define MASTER_PARAM_CNT        (5u)
+
+/* ---- FEAT-ESPGW-04：数据字典【CID 个数】= 5 ----
+ *   CID 0 = 整块读（5 个寄存器一次读完，01 03 00 00 00 05）
+ *   CID 1~4 = 单寄存器写（FEAT-ESPGW-05 下行控制）
+ *
+ * 读用整块、写用单条，是刻意的非对称设计：
+ *  - 读：RTU 响应帧无事务号/起始地址 ⇒ 逐寄存器读会「值整体前移一格」（官方 #16）
+ *        ⇒ 必须一次读整块（一个响应 / 一次 CRC）。
+ *  - 写：从站 eMBRegHoldingCB 的整批写是【原子】的（任一越界 ⇒ 全批拒、保留旧值），
+ *        且 WIN_LEN 固定拒写 ⇒ ⛔ 不能整块写 5 个，否则必定全批失败。
+ * ⇒ 写必须逐字段、各用一个 CID。
+ * MASTER_PARAM_CNT 仍为「寄存器个数(5)」，打印仍按 CID#n 逐字段输出。 */
+#define MASTER_CID_CNT          (5u)
+
+/* ---- 写用 CID（与寄存器号对应；WIN_LEN 无写 CID，属刻意缺失） ---- */
+#define CID_READ_ALL            (0u)
+#define CID_WR_TH               (1u)   /* 寄存器 0 */
+#define CID_WR_ALARM_CNT        (2u)   /* 寄存器 1 */
+#define CID_WR_RELEASE_CNT      (3u)   /* 寄存器 2 */
+#define CID_WR_WIN_ANOM         (4u)   /* 寄存器 4 */
+#define CID_WR_NONE             (0xFFFFu)  /* 该寄存器不可写（寄存器 3 = WIN_LEN） */
 
 /* ---- 从站范围宏（来自 SoundDog param.h，禁止自造） ---- */
 #define SD_PARAM_TH_MIN_x100    100u    /* 1.0 */
@@ -57,8 +78,12 @@ typedef struct {
 } sounddog_holding_t;
 #pragma pack(pop)
 
+/* ---- 整块读的字节数：5×u16 = 10（mbc_master_set_param_data 以 param_size 为准） ---- */
+#define SD_HOLD_ALL_BYTES       (sizeof(sounddog_holding_t))
+
 /* ---- 实例与字典表在 master_app.c 定义 ---- */
 extern sounddog_holding_t holding_regs;
-extern const mb_parameter_descriptor_t device_parameters[MASTER_PARAM_CNT];
+/* FEAT-ESPGW-04：字典表长度 = MASTER_CID_CNT（1），不再等于寄存器个数 */
+extern const mb_parameter_descriptor_t device_parameters[MASTER_CID_CNT];
 
 #endif /* MB_PARAM_H */

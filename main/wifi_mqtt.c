@@ -16,6 +16,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>      /* FEAT-ESPGW-05：strtoul */
 #include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -49,6 +50,97 @@ static volatile esp_mqtt_client_handle_t s_mqtt_client = NULL;
 static esp_timer_handle_t s_wifi_retry_timer = NULL;
 /* 残留-3：STA 已关联到 AP（等待DHCP）与否，由 STA_CONNECTED/DISCONNECTED 事件维护 */
 static bool s_sta_associated = false;
+
+/* FEAT-ESPGW-05：下行回调（NULL = 纯上行模式，不订阅） */
+static gateway_cmd_cb_t s_cmd_cb = NULL;
+
+/* ------------------------------------------------------------------ */
+/* FEAT-ESPGW-05：极简 JSON 取 u16 —— 不引第三方解析库                   */
+/* 只认 {"cid":N,"value":V} 形式；找不到/超范围即失败。                   */
+/* buf 不保证 NUL 结尾 ⇒ 调用方必须先转存到本地缓冲。                     */
+/* ------------------------------------------------------------------ */
+static bool json_get_u16(const char *buf, const char *key, uint16_t *out)
+{
+    if (buf == NULL || key == NULL || out == NULL) {
+        return false;
+    }
+    char pat[24];
+    int pn = snprintf(pat, sizeof(pat), "\"%s\":", key);
+    if (pn <= 0 || pn >= (int)sizeof(pat)) {
+        return false;
+    }
+    const char *p = strstr(buf, pat);
+    if (p == NULL) {
+        return false;
+    }
+    p += pn;
+    while (*p == ' ') {
+        p++;
+    }
+    if (*p < '0' || *p > '9') {          /* 只接受非负十进制；负数/引号串一律拒 */
+        return false;
+    }
+    char *end = NULL;
+    unsigned long v = strtoul(p, &end, 10);
+    if (end == p || v > 0xFFFFul) {
+        return false;
+    }
+    *out = (uint16_t)v;
+    return true;
+}
+
+/* 下行报文处理：解析 → 回调（⚠️ 回调在 MQTT 任务上下文，必须只入队） */
+static void mqtt_handle_cmd_data(esp_mqtt_event_handle_t event)
+{
+    if (s_cmd_cb == NULL) {
+        return;                          /* 未注册 = 纯上行模式 */
+    }
+    /* event->data 无 NUL 结尾 ⇒ 先转存。128 B 足够容纳本协议报文 */
+    char tmp[128];
+    int len = (event->data_len < (int)sizeof(tmp) - 1) ? event->data_len : (int)sizeof(tmp) - 1;
+    if (len <= 0) {
+        return;
+    }
+    memcpy(tmp, event->data, (size_t)len);
+    tmp[len] = '\0';
+
+    gateway_cmd_t cmd = { 0 };
+    if (!json_get_u16(tmp, "cid", &cmd.cid) || !json_get_u16(tmp, "value", &cmd.value)) {
+        ESP_LOGW(TAG, "cmd parse fail, drop: %s", tmp);
+        return;
+    }
+    ESP_LOGI(TAG, "cmd recv: cid=%u value=%u", (unsigned)cmd.cid, (unsigned)cmd.value);
+    s_cmd_cb(&cmd);
+}
+
+void gateway_mqtt_register_cmd_handler(gateway_cmd_cb_t cb)
+{
+    s_cmd_cb = cb;
+}
+
+void gateway_mqtt_publish_ack(uint16_t cid, uint16_t value, int err)
+{
+    if (s_mqtt_client == NULL) {
+        return;
+    }
+    /* ⚠️ 缓冲名刻意用 ack（不是 payload）：tools/test_mqtt_payload.py 按
+     * 发布侧 snprintf 的缓冲名 payload 反查【发布】格式串；若这里也叫 payload，
+     * 反查会抓到本条，导致既有护栏误红（§九「payload 唯一事实源」的护栏机制）。
+     * ⚠️ 本注释也刻意不写出那句 snprintf 调用原文 —— 正则同样会匹配注释。 */
+    char ack[96];
+    int n = snprintf(ack, sizeof(ack),
+                     "{\"cid\":%u,\"value\":%u,\"err\":%d}",
+                     (unsigned)cid, (unsigned)value, err);
+    if (n < 0 || n >= (int)sizeof(ack)) {
+        ESP_LOGE(TAG, "ack payload too long or snprintf error");
+        return;
+    }
+    int msg_id = esp_mqtt_client_publish(s_mqtt_client, CONFIG_MB_MQTT_TOPIC_ACK,
+                                         ack, (int)strlen(ack), 0, 0);
+    if (msg_id < 0) {
+        ESP_LOGW(TAG, "MQTT ack enqueue failed");
+    }
+}
 
 /* 周期重连回调：只需触发一次连接，失败会再由 DISCONNECTED 事件驱动后续逻辑 */
 static void wifi_retry_timer_cb(void *arg)
@@ -149,7 +241,41 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "MQTT connected to broker");
+        /* FEAT-ESPGW-05：只有注册了下行回调才订阅（否则保持纯上行，行为同 02） */
+        if (s_cmd_cb != NULL) {
+            int mid = esp_mqtt_client_subscribe(s_mqtt_client,
+                                                CONFIG_MB_MQTT_TOPIC_CMD, 1);
+            if (mid < 0) {
+                ESP_LOGW(TAG, "subscribe '%s' failed", CONFIG_MB_MQTT_TOPIC_CMD);
+            } else {
+                ESP_LOGI(TAG, "subscribed '%s' (msg_id=%d)", CONFIG_MB_MQTT_TOPIC_CMD, mid);
+            }
+        }
         break;
+    case MQTT_EVENT_DATA: {
+        /* FEAT-ESPGW-05：只处理 cmd topic 的【完整】报文。
+         * ⭐ 分片判据 = current_data_offset / total_data_len
+         *    （源① mqtt_client.h:193-196；源② mqtt.rst:201）。
+         *    ⛔ 不是 msg_id —— 那是「MQTT messaged id of message」（mqtt_client.h:200），
+         *    入站报文通常非 0，用它判分片会让所有命令被误丢。
+         * ⚠️ 分片时【只有首个事件】带 topic（mqtt_client.h:69-73）⇒ 后续分片无法归属，
+         *    故整条分片报文直接丢弃并告警（本项目报文 <64 B，正常不会分片）。 */
+        const bool complete = (event->current_data_offset == 0) &&
+                              (event->total_data_len == event->data_len);
+        if (!complete) {
+            ESP_LOGW(TAG, "fragmented cmd frame ignored (offset=%d total=%d len=%d)",
+                     event->current_data_offset, event->total_data_len, event->data_len);
+            break;
+        }
+        if (event->topic_len > 0) {
+            const size_t tl = (size_t)event->topic_len;
+            if ((tl == strlen(CONFIG_MB_MQTT_TOPIC_CMD)) &&
+                (strncmp(event->topic, CONFIG_MB_MQTT_TOPIC_CMD, tl) == 0)) {
+                mqtt_handle_cmd_data(event);
+            }
+        }
+        break;
+    }
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "MQTT disconnected, code=%d", event->error_handle ?
                  event->error_handle->connect_return_code : -1);

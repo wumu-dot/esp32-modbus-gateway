@@ -15,9 +15,37 @@ import pytest
 import json
 
 from mqtt_payload import (HoldingSnapshot, build_payload, payload_fits_buffer,
-                          PAYLOAD_FMT, OK_ALL_PARAMS)
+                          PAYLOAD_FMT, OK_ALL_PARAMS,
+                          build_ack, ack_fits_buffer, ACK_FMT, C_ACK_BUF)
 
 C_SRC = pathlib.Path(__file__).resolve().parent.parent / "main" / "wifi_mqtt.c"
+
+
+def _extract_literals_after(src, pattern, what):
+    """取出 pattern 之后的连续字符串字面量并去转义（C 侧多行拼接）。"""
+    m = re.search(pattern, src)
+    assert m, what
+    pos, parts = m.end(), []
+    lit = re.compile(r'\s*"((?:[^"\\]|\\.)*)"')
+    while True:
+        lm = lit.match(src, pos)
+        if not lm:
+            break
+        parts.append(lm.group(1))
+        pos = lm.end()
+    assert parts, what + "（snprintf 后未找到任何字符串字面量）"
+    return "".join(parts).replace('\\"', '"')
+
+
+def _extract_c_ack_fmt():
+    """FEAT-ESPGW-05：从 gateway_mqtt_publish_ack 的 snprintf(ack,...) 反查格式串。
+
+    ⚠️ 必须锚在 `ack`，不能锚 `payload` —— 发布侧那条是另一个护栏的地盘。
+    """
+    return _extract_literals_after(
+        C_SRC.read_text(encoding="utf-8"),
+        r"snprintf\s*\(\s*ack\s*,\s*sizeof\(ack\)\s*,\s*",
+        "在 main/wifi_mqtt.c 里找不到 snprintf(ack, sizeof(ack), ...)")
 
 
 def _extract_c_payload_fmt():
@@ -105,3 +133,38 @@ def test_payload_fits_192B_buffer(snapshot):
                           OK_ALL_PARAMS)
     assert payload_fits_buffer(worst) is True
     assert len(worst) < 192
+
+
+# ======================================================================
+# FEAT-ESPGW-05：下行控制回执 payload
+# ======================================================================
+
+def test_ack_fmt_matches_c_source():
+    """反漂移：ACK_FMT 必须逐字符等于 C 源码 gateway_mqtt_publish_ack 的格式串。"""
+    assert ACK_FMT == _extract_c_ack_fmt()
+
+
+def test_ack_matches_c_format():
+    """逐字符等于 C snprintf 期望串。"""
+    assert build_ack(0, 650, 0) == '{"cid":0,"value":650,"err":0}'
+
+
+def test_ack_encodes_error_code():
+    """err 为 esp_err_t 原值：0=成功、0x102 参数非法、0x103 不支持、0x107 超时。"""
+    assert json.loads(build_ack(3, 100, 0x103)) == {"cid": 3, "value": 100, "err": 259}
+    assert json.loads(build_ack(9, 0, 0x102)) == {"cid": 9, "value": 0, "err": 258}
+    assert json.loads(build_ack(0, 65535, 0x107))["err"] == 0x107
+
+
+def test_ack_is_valid_json_with_fixed_field_order():
+    """顶层字段顺序 cid,value,err —— 与 C snprintf 一致（订阅端可能按序解析）。"""
+    s = build_ack(4, 30, 0)
+    assert list(json.loads(s).keys()) == ["cid", "value", "err"]
+
+
+def test_ack_fits_96B_buffer():
+    """长度不越 96B 缓冲临界；最坏情况（全 u16 最大 + 4 位错误码）仍安全。"""
+    assert ack_fits_buffer(build_ack(0, 0, 0)) is True
+    worst = build_ack(65535, 65535, -2147483648)
+    assert ack_fits_buffer(worst) is True
+    assert len(worst) < C_ACK_BUF

@@ -59,3 +59,28 @@ def build_payload(regs, ok_count=OK_ALL_PARAMS):
 def payload_fits_buffer(payload):
     """C 端用 192B 静态缓冲，n<0 或 n>=192 拒发，这里同判据。"""
     return 0 <= len(payload) < C_PAYLOAD_BUF
+
+
+# ======================================================================
+# FEAT-ESPGW-05：MQTT 下行控制的回执 payload（同样受反查护栏保护）
+# ----------------------------------------------------------------------
+# 真值在 main/wifi_mqtt.c 的 gateway_mqtt_publish_ack() 里，用 snprintf(ack,...)
+# 打包。⚠️ C 端缓冲名刻意叫 ack 而不是 payload，否则既有 _extract_c_payload_fmt()
+# 会抓到这一条（它按 `snprintf(payload,` 反查），导致发布侧护栏误红。
+# ======================================================================
+
+# 与 C 端 snprintf(ack, sizeof(ack), ...) 完全一致的格式串
+ACK_FMT = '{"cid":%u,"value":%u,"err":%d}'
+
+# 与 C 端 gateway_mqtt_publish_ack 的 char ack[96] 一致
+C_ACK_BUF = 96
+
+
+def build_ack(cid, value, err):
+    """镜像 C 端 ack 打包：cid=寄存器号，value=下发值，err=esp_err_t 原值。"""
+    return ACK_FMT % (cid, value, err)
+
+
+def ack_fits_buffer(ack):
+    """C 端 96B 静态缓冲，n<0 或 n>=96 拒发，这里同判据。"""
+    return 0 <= len(ack) < C_ACK_BUF

@@ -99,4 +99,23 @@ menu "ESP32 Modbus Gateway Configuration"
         help
             Topic to which the 5 holding-register JSON snapshot is published.
 
+    # ---- FEAT-ESPGW-05：下行控制 ----
+
+    config MB_MQTT_TOPIC_CMD
+        string "MQTT command (downlink) topic"
+        default "esp32gw/sounddog/cmd"
+        help
+            Topic the gateway SUBSCRIBES to for remote control.
+            Payload format (plain text, no JSON library):
+                {"cid":<register 0..4>,"value":<u16>}
+            Register 3 (WIN_LEN) is fixed on the slave and is rejected locally.
+
+    config MB_MQTT_TOPIC_ACK
+        string "MQTT command ACK topic"
+        default "esp32gw/sounddog/ack"
+        help
+            Topic the gateway publishes the write result to:
+                {"cid":<register>,"value":<u16>,"err":<esp_err_t>}
+            err = 0 means the write was acknowledged by the slave.
+
 endmenu

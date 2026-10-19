@@ -37,4 +37,45 @@ esp_err_t wifi_mqtt_init(void);
  */
 void gateway_mqtt_publish(const sounddog_holding_t *regs, uint16_t ok_count);
 
+/* ------------------------------------------------------------------ */
+/* FEAT-ESPGW-05：MQTT 下行控制（订阅 cmd → 回调 → 回执 ack）          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief 下行控制请求。cid = SoundDog 保持寄存器号（0..MASTER_PARAM_CNT-1）。
+ *
+ * 线路格式（纯文本，⛔ 不引 JSON 解析库）：
+ *   下行  <topic_cmd> : {"cid":0,"value":650}
+ *   回执  <topic_ack> : {"cid":0,"value":650,"err":0}
+ */
+typedef struct {
+    uint16_t cid;      /* 寄存器号 */
+    uint16_t value;    /* 目标值 */
+} gateway_cmd_t;
+
+/**
+ * @brief 下行回调类型。⚠️ 在【MQTT 任务上下文】被调用。
+ *
+ * ⛔ GW-04：回调里**不得**直接调 mbc_master_set_parameter() 等主站 API
+ * （唯一任务独占）。正确做法 = 入队，由 master_poll_task 执行。
+ */
+typedef void (*gateway_cmd_cb_t)(const gateway_cmd_t *cmd);
+
+/**
+ * @brief 注册下行回调（必须在 wifi_mqtt_init() 之前调用）。
+ *
+ * 只有注册后才会在 MQTT_EVENT_CONNECTED 时订阅 cmd topic；
+ * 未注册 = 纯上行模式（与 FEAT-ESPGW-02 行为一致）。
+ */
+void gateway_mqtt_register_cmd_handler(gateway_cmd_cb_t cb);
+
+/**
+ * @brief 上行一条写回执（异步、断线丢弃）。
+ *
+ * @param cid    寄存器号
+ * @param value  实际下发的值
+ * @param err    写入结果（esp_err_t 原值；ESP_OK=0）
+ */
+void gateway_mqtt_publish_ack(uint16_t cid, uint16_t value, int err);
+
 #endif /* WIFI_MQTT_H */
