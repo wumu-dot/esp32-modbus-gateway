@@ -10,6 +10,7 @@
 | **改引脚 / UART / 波特率** | `main/Kconfig.projbuild`（`MB_UART_*`）＋ **`sdkconfig`（实际生效）** ＋ `docs/hardware/硬件配置-2026-09-22.md` |
 | **核对板型 / 供电 / USB 口** | `docs/hardware/ESP32-S3-COREBOARD-V1.4-原理图.md`（`§5.1` 供电、`§5.2` USB-UART） |
 | **给 ESP32 接独立电源 / 欠压 / 量 5V·3V3** | `docs/hardware/ESP32独立供电-选型接线与验收-2026-10-19.md`（**§3 先判 `J1.21` 是否悬空** → §5 串 100 Ω → §7 AC-1~7） |
+| **给从站加传感器（SHT30 / MPU6050）** | `docs/spec/` 两份扩展规格；⚠️ 改寄存器数必须**两侧同步**（`MODBUS_REG_HOLDING_NUM` ⇔ `MASTER_PARAM_CNT`） |
 | **改数据字典 / 寄存器映射** | `main/mb_param.h` ＋ `main/master_app.c`（描述符表）＋ `docs/spec/` |
 | **改轮询 / 主站行为** | `main/master_app.c`（⚠️ `GW-04`：唯一任务独占主站 API） |
 | **改 MQTT 上行 / 下行** | `main/wifi_mqtt.c` ＋ **必须同步 `tools/mqtt_payload.py`**（唯一事实源）＋ `main/Kconfig.projbuild`（topic） |
@@ -46,6 +47,7 @@
 | `docs/hardware/硬件配置-2026-09-22.md` | 接线事实源（RS485 模块丝印、VCC=3.3V、⛔ 禁 5V 进总线） |
 | `docs/hardware/从站底板-传感器+RS485-PCB设计规格-2026-10-19.md` | **2 层底板规格**：网络表/布局/走线/BOM/AC；含 M1~M5 **待实测**项与 F1~F4 翻车点 |
 | `docs/spec/SoundDog-传感器扩展规格-SHT30-2026-10-19.md` | **从站交接规格**：SHT30 命令集（官方手册）＋寄存器 5→7 映射＋两侧同步硬约束＋S1~S8 坑清单 |
+| `docs/spec/SoundDog-传感器扩展规格-MPU6050-2026-10-20.md` | **从站交接规格**：MPU6050 接线（I2C1 三设备共存）＋VCC 3.3/5V 判定＋初始化序列＋振动 RMS 配置＋M1~M8 坑清单＋AC-1~6；⚠️ 模块板级项（LDO/上拉/排针）**待实物确认** |
 | `docs/spec/ESP32-Modbus-Gateway-三源预研.md` | 预研（从站事实、板型引脚、协议参数） |
 | `docs/RS485抓信号台账-2026-09-22.md` | 抓信号记录 |
 | `docs/RS485联调进度-2026-09-22.md` | 联调进度 |
