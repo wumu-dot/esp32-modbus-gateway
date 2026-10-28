@@ -89,33 +89,66 @@ menu "ESP32 Modbus Gateway Configuration"
 
     config MB_MQTT_BROKER_URI
         string "MQTT broker URI"
-        default "mqtt://192.168.4.1:1883"
+        default "mqtt://YOUR-ENDPOINT.iot-api.com:1883"
         help
-            Broker address for publish (e.g. mqtt://<PC local IP>:1883).
+            Broker address. For ThingsCloud: mqtt://<endpoint>:1883
+            (endpoint from Console -> Device -> Connection page).
+
+    config MB_MQTT_USERNAME
+        string "MQTT username"
+        default ""
+        help
+            ThingsCloud: device AccessToken (per-device, from the
+            Device -> Connection page). NOT the project-API AccessToken.
+
+    config MB_MQTT_PASSWORD
+        string "MQTT password"
+        default ""
+        help
+            ThingsCloud: ProjectKey (shared by all devices in the project).
 
     config MB_MQTT_TOPIC
         string "MQTT publish topic"
-        default "esp32gw/sounddog/holding"
+        default "attributes"
         help
-            Topic to which the 5 holding-register JSON snapshot is published.
+            ThingsCloud: publish attributes to 'attributes'.
+            Legacy local broker: esp32gw/sounddog/holding
 
     # ---- FEAT-ESPGW-05：下行控制 ----
 
     config MB_MQTT_TOPIC_CMD
         string "MQTT command (downlink) topic"
-        default "esp32gw/sounddog/cmd"
+        default "attributes/push"
         help
             Topic the gateway SUBSCRIBES to for remote control.
+            ThingsCloud: 'attributes/push' (platform -> device).
+            Legacy local broker: esp32gw/sounddog/cmd
             Payload format (plain text, no JSON library):
                 {"cid":<register 0..4>,"value":<u16>}
             Register 3 (WIN_LEN) is fixed on the slave and is rejected locally.
 
     config MB_MQTT_TOPIC_ACK
         string "MQTT command ACK topic"
-        default "esp32gw/sounddog/ack"
+        default "attributes/response"
         help
-            Topic the gateway publishes the write result to:
-                {"cid":<register>,"value":<u16>,"err":<esp_err_t>}
-            err = 0 means the write was acknowledged by the slave.
+            Legacy: topic the gateway publishes the write result to.
+            ThingsCloud has no per-command ACK topic: the effect of a
+            write is observed in the NEXT attribute publish. The gateway
+            therefore logs the ACK locally instead of publishing it
+            (publishing an undefined key would be rejected with 406).
+
+    config MB_MQTT_PUBLISH_PERIOD_S
+        int "Minimum MQTT attribute publish interval (seconds)"
+        range 1 3600
+        default 30
+        help
+            Minimum interval between attribute uploads. Modbus polling stays
+            at 1 s; only the cloud publish is throttled.
+
+            ThingsCloud data processing agreement section 3.2.3:
+              free-tier devices: >= 30 s between uploads
+              paid-tier devices: >= 5 s between uploads
+            Publishing faster than the platform limit may cause the broker
+            to close the connection.
 
 endmenu

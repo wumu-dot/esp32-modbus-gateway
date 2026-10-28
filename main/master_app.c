@@ -17,11 +17,13 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"     /* FEAT-ESPGW-05：下行命令队列 */
 #include "esp_log.h"
+#include "esp_timer.h"          /* MQTT 上行限频：单调微秒时钟 */
 #include "sdkconfig.h"
 #include "mbcontroller.h"
 #include "esp_modbus_master.h"
 #include "mb_param.h"
 #include "driver/uart.h"        /* FEAT-ESPGW-04：uart_flush_input（清 RX FIFO，对位官方 #16 建议②） */
+#include "soc/uart_struct.h"    /* 2026-10-26：直接访问 rs485_conf 的时序延迟位（无公开 API） */
 #include "wifi_mqtt.h"          /* FEAT-ESPGW-02：MQTT 上行（与打印双出一源） */
 
 #define TAG "MB_MASTER"
@@ -45,6 +47,12 @@ static void *master_handle = NULL;
 
 /* 数据字典实例：5×Holding 快照缓冲（字段顺序 = 帧地址，见 mb_param.h） */
 sounddog_holding_t holding_regs;
+
+/* ThingsCloud 数据处理协议 §3.2.3：免费版设备上报间隔不得低于 30 s。
+ * Modbus 仍按 1 s 轮询并打印；仅云端发布限频，避免超出平台限制。
+ * 注：当前 CONNACK 5 是平台未授权，与此限频无因果关系。 */
+#define MQTT_PUBLISH_PERIOD_US  ((int64_t)CONFIG_MB_MQTT_PUBLISH_PERIOD_S * 1000000LL)
+static int64_t s_last_mqtt_publish_us;
 
 /* ------------------------------------------------------------------ */
 /* 数据字典表（SoundDog 5×Holding，0 基址）定义                        */
@@ -242,6 +250,11 @@ static void master_poll_task(void *arg)
 
         for (int attempt = 0; (attempt < 2) && !round_ok; attempt++) {
             if (attempt > 0) {
+                /* 【2026-10-25】官方 #11 / #16 要求「wait timeout **then** flush」，
+                 * 原有实现是「立即 flush」——迟到应答还在路上时清不掉，等于没清。
+                 * 这里先等 20 ms（迟到帧最长 13 B @115200 ≈ 1.1 ms，20 ms 有 18 倍余量），
+                 * 让残留帧全部落地后再清 RX FIFO + UART 事件队列。 */
+                vTaskDelay(pdMS_TO_TICKS(20));
                 /* 清 RX FIFO：丢掉可能残留的回声帧 / 上一事务的迟到应答 */
                 (void)uart_flush_input(MB_PORT_NUM);
             }
@@ -273,7 +286,12 @@ static void master_poll_task(void *arg)
             for (uint16_t i = 0; i < MASTER_PARAM_CNT; i++) {
                 ESP_LOGI(TAG, "CID#%u %s = %u", (unsigned)i, s_field_name[i], (unsigned)f[i]);
             }
-            gateway_mqtt_publish(&holding_regs, MASTER_PARAM_CNT);
+            const int64_t now_us = esp_timer_get_time();
+            if ((s_last_mqtt_publish_us == 0) ||
+                ((now_us - s_last_mqtt_publish_us) >= MQTT_PUBLISH_PERIOD_US)) {
+                gateway_mqtt_publish(&holding_regs, MASTER_PARAM_CNT);
+                s_last_mqtt_publish_us = now_us;
+            }
         } else {
             ESP_LOGW(TAG, "round had 0 ok reads, MQTT publish skipped (slave offline?)");
         }
@@ -332,6 +350,37 @@ static esp_err_t master_init(void)
     MB_RETURN_ON_FALSE((err == ESP_OK), ESP_ERR_INVALID_STATE, TAG,
                        "mb serial set mode failure, uart_set_mode() returned (0x%x).", (int)err);
 
+    /* 【2026-10-25 新增】RS485 半双工下，发送完成后 UART 立即把 RTS 拉低并开始
+     * 接收；若从站应答的首字节在这之前/紧邻到达，会被当成"事务外数据"丢弃，
+     * 表现为 `drop data received outside of transaction` +
+     * `ESP_ERR_INVALID_RESPONSE (0x108)`。实测该错误在换 RS485 模块后出现
+     * （旧模块报 0x107 超时，新模块报 0x108 无效响应）。
+     * tout 单位 = 符号时间（10 bit/符号 @115200 ≈ 86.8 µs）。
+     * ⚠️ 取值 3（社区实践值）：3.5 字符时间 ≈ 0.26 ms，正好对应 RTU 帧间静默。
+     * 初版误设 10（0.87 ms），过大反而挤压从站应答窗口 —— 2026-10-25 更正。
+     * 参考：helmutheller.de/~heller/RPI/RS485/RS485.html（ECHO_READ_TOUT = 3）。 */
+    err = uart_set_rx_timeout(MB_PORT_NUM, 3);
+
+    /* 【2026-10-26 23:3x】电路 B（模块 EN 单脚 = DE/RE 短接）的时序微调实验。
+     * 依据 soc/esp32s3/register/soc/uart_struct.h:778-815 的 rs485_conf 字段：
+     *   rs485_tx_dly_num[9:6] —— 发送器内部信号延迟（0~15 个 bit 时间）
+     *   rs485_rx_dly_num[5]   —— 接收器内部信号延迟（0~1 个 bit）
+     * 该两组位 UART_MODE_RS485_HALF_DUPLEX 均未设置（默认 0）。
+     * 目的：把 RTS 拉低时刻与"最后一个字节真正离开发送器"错开，
+     *       消除实测到的回显 `03 00 00 00 05`（主站自身 PDU 残余）。
+     * ⚠️ 实验值，逐档试：tx_dly = 2 → 4 → 6；无效再试 rx_dly = 1。 */
+    /* ⛔【2026-10-27 00:2x 全部回滚】
+     * 曾依次试过 rs485_tx_dly_num(2/4)、rs485_rx_dly_num(1)、rs485tx_rx_en(1)，
+     * 全部无效或更差：10-24 23:44 基线是「约 1 分钟 1 次」，加完这些后
+     * 退化为「一次都不通」（0x108 ×76、ok reads ×19 全 0）。
+     * ⇒ 直接操作 rs485_conf 寄存器在本硬件上没有任何收益，只会破坏
+     *    UART_MODE_RS485_HALF_DUPLEX 建立的默认时序。
+     * ⇒ 一律不再写这些位，交回 HAL。若要复测，见
+     *    `桌面\报告\审计报告\esp\RS485-实验计划书-2026-10-26.md` 的 E4。 */
+    ESP_LOGI(TAG, "RS485 timing tuned: tx_dly=%d rx_dly=%d",
+             (int)UART2.rs485_conf.rs485_tx_dly_num,
+             (int)UART2.rs485_conf.rs485_rx_dly_num);
+
     vTaskDelay(pdMS_TO_TICKS(5));
 
     err = mbc_master_start(master_handle);
@@ -354,8 +403,13 @@ void app_main(void)
      * 上面两行固定 tag 的 DEBUG 覆盖不到它们 ⇒ 当前默认级别 INFO 把它们全滤掉了
      * （这正是历史抓包里 :MB_RECV / :MB_TRANSMIT / :PORT_SEND 都是 0 次的原因）。
      * esp_log_level_set("*", DEBUG) 改的是"默认级别"，动态 tag 才会打印。
-     * ⚠️ 诊断期专用：日志量明显上升，抓到第一现场后须关掉（见 FEAT-ESPGW-04 §回滚）。 */
-    esp_log_level_set("*", ESP_LOG_DEBUG);
+     * ⚠️【2026-10-25 回滚 #1】诊断已完成，默认级别恢复 INFO：
+     *   实测 DEBUG 全开时串口日志 ≈3.8 KB/s，占 115200 带宽 33%，
+     *   每秒约 174 ms 的 printf 阻塞打乱 Modbus 1 s 轮询周期，
+     *   与 RS485 偶发超时强相关（云端上传间隔由 1 s 劣化到 11~80 s）。
+     *   ⇒ 日常运行用 INFO；需要抓 :MB_RECV / :MB_TRANSMIT 字节时，
+     *     临时把下面这行改回 ESP_LOG_DEBUG，抓完立刻改回来。 */
+    esp_log_level_set("*", ESP_LOG_INFO);   /* 诊断抓字节后已改回（2026-10-26 23:2x） */
 
     /* 残留-2：主站 init 失败不复位整板（UART 冲突/硬件故障时 abort 会陷入
      * 复位-再失败-再复位循环）。打印错误并直接返回，不再启动轮询与上行。 */

@@ -105,12 +105,43 @@ static void mqtt_handle_cmd_data(esp_mqtt_event_handle_t event)
     tmp[len] = '\0';
 
     gateway_cmd_t cmd = { 0 };
-    if (!json_get_u16(tmp, "cid", &cmd.cid) || !json_get_u16(tmp, "value", &cmd.value)) {
-        ESP_LOGW(TAG, "cmd parse fail, drop: %s", tmp);
+
+    /* ① 旧格式（自建 / 公共 broker）：{"cid":0,"value":650} */
+    if (json_get_u16(tmp, "cid", &cmd.cid) && json_get_u16(tmp, "value", &cmd.value)) {
+        ESP_LOGI(TAG, "cmd recv (cid form): cid=%u value=%u",
+                 (unsigned)cmd.cid, (unsigned)cmd.value);
+        s_cmd_cb(&cmd);
         return;
     }
-    ESP_LOGI(TAG, "cmd recv: cid=%u value=%u", (unsigned)cmd.cid, (unsigned)cmd.value);
-    s_cmd_cb(&cmd);
+
+    /* ② ThingsCloud 属性下发格式：{"th":650} —— 键名 = 功能定义中的属性标识符。
+     *    ⚠️ 平台可一次下发多个属性，本循环逐个映射；命令队列是覆盖式的
+     *    （上游 xQueueOverwrite），多属性同时下发时只保留**最后一个**。
+     *    映射表必须与 ThingsCloud「功能定义」的属性标识符逐字一致，
+     *    并与从站 Modbus 寄存器 0..4 的顺序相同。 */
+    static const struct { const char *key; uint16_t cid; } k_attr_map[] = {
+        { "th",          0u },   /* 报警阈值       → reg 0 */
+        { "alarm_cnt",   1u },   /* 连续异常帧数   → reg 1 */
+        { "release_cnt", 2u },   /* 连续正常帧数   → reg 2 */
+        { "win_len",     3u },   /* 滑窗长度       → reg 3（从站固定拒写） */
+        { "win_anom",    4u },   /* 窗内异常阈值   → reg 4 */
+    };
+    bool any = false;
+    for (size_t i = 0; i < (sizeof(k_attr_map) / sizeof(k_attr_map[0])); i++) {
+        uint16_t v = 0;
+        if (json_get_u16(tmp, k_attr_map[i].key, &v)) {
+            gateway_cmd_t c = { 0 };
+            c.cid = k_attr_map[i].cid;
+            c.value = v;
+            ESP_LOGI(TAG, "cmd recv (attr form): %s=%u -> cid=%u",
+                     k_attr_map[i].key, (unsigned)v, (unsigned)c.cid);
+            s_cmd_cb(&c);
+            any = true;
+        }
+    }
+    if (!any) {
+        ESP_LOGW(TAG, "cmd parse fail, drop: %s", tmp);
+    }
 }
 
 void gateway_mqtt_register_cmd_handler(gateway_cmd_cb_t cb)
@@ -120,26 +151,13 @@ void gateway_mqtt_register_cmd_handler(gateway_cmd_cb_t cb)
 
 void gateway_mqtt_publish_ack(uint16_t cid, uint16_t value, int err)
 {
-    if (s_mqtt_client == NULL) {
-        return;
-    }
-    /* ⚠️ 缓冲名刻意用 ack（不是 payload）：tools/test_mqtt_payload.py 按
-     * 发布侧 snprintf 的缓冲名 payload 反查【发布】格式串；若这里也叫 payload，
-     * 反查会抓到本条，导致既有护栏误红（§九「payload 唯一事实源」的护栏机制）。
-     * ⚠️ 本注释也刻意不写出那句 snprintf 调用原文 —— 正则同样会匹配注释。 */
-    char ack[96];
-    int n = snprintf(ack, sizeof(ack),
-                     "{\"cid\":%u,\"value\":%u,\"err\":%d}",
-                     (unsigned)cid, (unsigned)value, err);
-    if (n < 0 || n >= (int)sizeof(ack)) {
-        ESP_LOGE(TAG, "ack payload too long or snprintf error");
-        return;
-    }
-    int msg_id = esp_mqtt_client_publish(s_mqtt_client, CONFIG_MB_MQTT_TOPIC_ACK,
-                                         ack, (int)strlen(ack), 0, 0);
-    if (msg_id < 0) {
-        ESP_LOGW(TAG, "MQTT ack enqueue failed");
-    }
+    /* ThingsCloud 没有"命令 ACK 主题"：属性上报只接受功能定义里已声明的键，
+     * 擅自发 {"cid":..,"err":..} 会被平台以 406 拒收并可能断连。
+     * ⇒ 回执改为【本地日志】；真正的回执由下一轮属性上报体现（改了值就能看到）。
+     * 若将来改回自建 broker / 公共 broker，把下面的 publish 分支放开即可。 */
+    ESP_LOGI(TAG, "ack: cid=%u value=%u err=%d (local only, ThingsCloud has no ack topic)",
+             (unsigned)cid, (unsigned)value, err);
+    (void)s_mqtt_client;
 }
 
 /* 周期重连回调：只需触发一次连接，失败会再由 DISCONNECTED 事件驱动后续逻辑 */
@@ -243,8 +261,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
         ESP_LOGI(TAG, "MQTT connected to broker");
         /* FEAT-ESPGW-05：只有注册了下行回调才订阅（否则保持纯上行，行为同 02） */
         if (s_cmd_cb != NULL) {
+            /* ThingsCloud 只支持 QoS 0，订阅也必须用 0 */
             int mid = esp_mqtt_client_subscribe(s_mqtt_client,
-                                                CONFIG_MB_MQTT_TOPIC_CMD, 1);
+                                                CONFIG_MB_MQTT_TOPIC_CMD, 0);
             if (mid < 0) {
                 ESP_LOGW(TAG, "subscribe '%s' failed", CONFIG_MB_MQTT_TOPIC_CMD);
             } else {
@@ -347,7 +366,13 @@ esp_err_t wifi_mqtt_init(void)
         .sta = {
             .ssid = CONFIG_MB_WIFI_SSID,
             .password = CONFIG_MB_WIFI_PASS,
-            .threshold.authmode = WIFI_AUTH_WPA2_WPA3_PSK,  /* 中危-8：兼容 WPA3，不再只认 WPA2 */
+            /* ⚠️ WIFI_AUTH_WPA2_WPA3_PSK（值 7）的语义是"要求 AP 处于
+             * WPA2/WPA3 **混合**模式"，不是"WPA2 或 WPA3 都接受"。
+             * 手机热点 / 多数家用路由是纯 WPA2_PSK（值 3）⇒ 会被拒，
+             * 表现为 reason=211 (NO_AP_FOUND_IN_AUTHMODE_THRESHOLD)
+             * 与 "authmode threshold failure (recvd,thresh)=(3,7)"。
+             * WIFI_AUTH_WPA2_PSK 既接受纯 WPA2，也接受 WPA/WPA2 混合。 */
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
     err = esp_wifi_set_mode(WIFI_MODE_STA);
@@ -370,9 +395,14 @@ esp_err_t wifi_mqtt_init(void)
         /* 不 return 错误：网关主站轮询照常，MQTT 让 esp-mqtt 重连层兜底 */
     }
 
-    /* MQTT 客户端：Broker URI 走 Kconfig；非阻塞启动 */
+    /* MQTT 客户端：Broker URI / 认证 / 保活走 Kconfig；非阻塞启动。
+     * ThingsCloud 要求：username=设备 AccessToken、password=ProjectKey、
+     * keepalive >= 60 s、QoS 只能 0（QoS1/2 会被平台拒绝）。 */
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = CONFIG_MB_MQTT_BROKER_URI,
+        .credentials.username = CONFIG_MB_MQTT_USERNAME,
+        .credentials.authentication.password = CONFIG_MB_MQTT_PASSWORD,
+        .session.keepalive = 60,
     };
     s_mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
     if (s_mqtt_client == NULL) {
