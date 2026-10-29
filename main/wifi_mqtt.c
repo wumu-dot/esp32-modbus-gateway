@@ -447,7 +447,7 @@ void gateway_mqtt_publish(const sounddog_holding_t *regs, uint16_t ok_count)
     int n = snprintf(payload, sizeof(payload),
                      "{\"th\":%u,\"alarm_cnt\":%u,\"release_cnt\":%u,"
                      "\"win_len\":%u,\"win_anom\":%u,"
-                     "\"temp\":%.1f,\"humi\":%.1f,"
+                     "\"temperature\":%.1f,\"humidity\":%.1f,"
                      "\"vib_rms\":%u,\"vib_peak\":%u,\"ok\":%u}",
                      (unsigned)regs->th, (unsigned)regs->alarm_cnt,
                      (unsigned)regs->release_cnt, (unsigned)regs->win_len,

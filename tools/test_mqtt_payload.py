@@ -86,10 +86,13 @@ def test_payload_fmt_matches_c_source():
 
 
 def test_payload_matches_c_format(snapshot):
-    """打包结果逐字符等于 C snprintf 期望串（含 ok 元数据）。"""
+    """打包结果逐字符等于 C snprintf 期望串（含 ok 元数据）。
+
+    ⚠️ JSON 键 `temperature`/`humidity`，结构体成员仍是 `temp`/`humi`。
+    """
     assert build_payload(snapshot) == (
         '{"th":600,"alarm_cnt":30,"release_cnt":60,"win_len":100,"win_anom":30,'
-        '"temp":25.3,"humi":61.2,"vib_rms":0,"vib_peak":0,"ok":9}')
+        '"temperature":25.3,"humidity":61.2,"vib_rms":0,"vib_peak":0,"ok":9}')
 
 
 def test_payload_is_valid_json_and_field_order(snapshot):
@@ -97,7 +100,7 @@ def test_payload_is_valid_json_and_field_order(snapshot):
     s = build_payload(snapshot)
     obj = json.loads(s)
     assert list(obj.keys()) == ["th", "alarm_cnt", "release_cnt", "win_len",
-                                "win_anom", "temp", "humi", "vib_rms",
+                                "win_anom", "temperature", "humidity", "vib_rms",
                                 "vib_peak", "ok"]
     assert obj["th"] == 600
     assert obj["win_anom"] == 30
@@ -109,12 +112,13 @@ def test_temp_humi_offset_conversion():
 
     这是本镜像最容易漂移的一处——偏移量写错会让云端稳定显示错值，
     而且"看起来像正常温度"，比报错更难发现。
+    ⚠️ JSON 键是 temperature/humidity（结构体成员仍叫 temp/humi）。
     """
     # 25.3℃ ⇒ 753；0.0℃ ⇒ 500；-45.0℃ ⇒ 50（int16 负温经 +500 抬到正整数区）
-    assert json.loads(build_payload(HoldingSnapshot(temp=753, humi=612)))["temp"] == 25.3
-    assert json.loads(build_payload(HoldingSnapshot(temp=753, humi=612)))["humi"] == 61.2
-    assert json.loads(build_payload(HoldingSnapshot(temp=500)))["temp"] == 0.0
-    assert json.loads(build_payload(HoldingSnapshot(temp=50)))["temp"] == -45.0
+    assert json.loads(build_payload(HoldingSnapshot(temp=753, humi=612)))["temperature"] == 25.3
+    assert json.loads(build_payload(HoldingSnapshot(temp=753, humi=612)))["humidity"] == 61.2
+    assert json.loads(build_payload(HoldingSnapshot(temp=500)))["temperature"] == 0.0
+    assert json.loads(build_payload(HoldingSnapshot(temp=50)))["temperature"] == -45.0
 
 
 def test_field_names_match_struct_members(snapshot):
@@ -130,7 +134,7 @@ def test_wide_range_values_preserved():
     obj = json.loads(build_payload(big))
     assert obj == {"th": 65535, "alarm_cnt": 0, "release_cnt": 1,
                    "win_len": 100, "win_anom": 2000,
-                   "temp": 6503.5, "humi": 6553.5,
+                   "temperature": 6503.5, "humidity": 6553.5,
                    "vib_rms": 65535, "vib_peak": 65535, "ok": 9}
 
 

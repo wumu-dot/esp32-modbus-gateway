@@ -8,10 +8,14 @@ JSON。本模块用相同格式逐字符镜像该打包逻辑，作为离线回�
 超界即拒发）。
 
 镜像一致性判据（test 断言）：
-  - 字段顺序 th,alarm_cnt,release_cnt,win_len,win_anom,temp,humi,vib_rms,vib_peak,ok
-    与 C snprintf 完全一致
-  - 字段名 = mb_param.h 结构体成员名；ok 为本轮成功读取数（非寄存器，元数据）
-  - 0..4 原样落出（%u）；5..8 为只读遥测，temp/humi 在打包时做偏移/缩放换算
+  - 字段顺序 th,alarm_cnt,release_cnt,win_len,win_anom,temperature,humidity,
+    vib_rms,vib_peak,ok 与 C snprintf 完全一致
+  - ⚠️ **JSON 键 ≠ 结构体成员名（两处例外）**：结构体成员是 `temp` / `humi`
+    （`mb_param.h`），而 JSON 键发 `temperature` / `humidity` —— 为了对齐
+    ThingsCloud 的物模型（该平台的 `temperature` / `humidity` 自带单位 ℃ / %RH
+    与精度 0.1，白拿）。其余 7 项键名与成员名一致。
+  - `ok` 为本轮成功读取数（非寄存器，元数据）
+  - 0..4 原样落出（%u）；5..8 为只读遥测，温度/湿度在打包时做偏移/缩放换算
     （reg5=温度×10+500 ⇒ 753→25.3；reg6=湿度×10 ⇒ 612→61.2）
   - PAYLOAD_FMT 由 test_payload_fmt_matches_c_source 从 main/wifi_mqtt.c 反查，
     改 C 不改这里（或反之）都会红，杜绝"测试全绿但镜像已漂移"
@@ -21,7 +25,7 @@ JSON。本模块用相同格式逐字符镜像该打包逻辑，作为离线回�
 
 # 与 main/wifi_mqtt.c snprintf 完全一致的打包格式（改动会被反查测试拦截）
 PAYLOAD_FMT = ('{"th":%u,"alarm_cnt":%u,"release_cnt":%u,"win_len":%u,"win_anom":%u,'
-               '"temp":%.1f,"humi":%.1f,"vib_rms":%u,"vib_peak":%u,"ok":%u}')
+               '"temperature":%.1f,"humidity":%.1f,"vib_rms":%u,"vib_peak":%u,"ok":%u}')
 
 # 与 C 端 gateway_mqtt_publish 缓冲一致；超界 C 端会拒发，这里同判据
 C_PAYLOAD_BUF = 256
@@ -57,7 +61,11 @@ class HoldingSnapshot:
         self.vib_peak = vib_peak
 
     def field_order(self):
-        """字段顺序 = 打包顺序（与 C snprintf 逐字段对应；勿改）。"""
+        """结构体字段顺序 = 打包顺序（与 C snprintf 逐字段对应；勿改）。
+
+        ⚠️ 这是 **结构体成员名**，不是 JSON 键名 —— `temp`/`humi` 实际发出的键是
+        `temperature`/`humidity`（见 PAYLOAD_FMT），因为对齐 ThingsCloud 物模型。
+        """
         return ("th", "alarm_cnt", "release_cnt", "win_len", "win_anom",
                 "temp", "humi", "vib_rms", "vib_peak")
 
