@@ -89,7 +89,7 @@ static int64_t s_last_mqtt_publish_us;
  */
 const mb_parameter_descriptor_t device_parameters[MASTER_CID_CNT] = {
     // { CID, ParamName, Units, SlaveAddr, RegType, RegStart, RegSize, InstanceOffset, DataType, DataSize, Options, Access }
-    /* ---- 读：一次读满 5 个保持寄存器 ---- */
+    /* ---- 读：一次读满 9 个保持寄存器（0..4 参数 + 5..8 遥测） ---- */
     { CID_READ_ALL, STR("SD_HOLD_ALL"), STR("-"), SD_DEVICE_ADDR, MB_PARAM_HOLDING,
       HOLD_REG_START(th),        MASTER_PARAM_CNT,
       HOLD_OFFSET(th),           PARAM_TYPE_U16, SD_HOLD_ALL_BYTES,
@@ -117,9 +117,12 @@ const mb_parameter_descriptor_t device_parameters[MASTER_CID_CNT] = {
       OPTS( SD_PARAM_FRAME_MIN,   SD_PARAM_FRAME_MAX, 0 ), PAR_PERMS_READ_WRITE },
 };
 
-/* FEAT-ESPGW-05：寄存器号 → 写 CID（索引 = 寄存器号；CID_WR_NONE = 不可写） */
+/* FEAT-ESPGW-05：寄存器号 → 写 CID（索引 = 寄存器号；CID_WR_NONE = 不可写）
+ * 9 个寄存器里只有 0/1/2/4 可写；3 号 WIN_LEN 从站固定拒写；
+ * 5..8 是只读遥测，写下去从站回 MB_ENOREG（整批拒绝）。 */
 static const uint16_t s_reg_to_wr_cid[MASTER_PARAM_CNT] = {
-    CID_WR_TH, CID_WR_ALARM_CNT, CID_WR_RELEASE_CNT, CID_WR_NONE, CID_WR_WIN_ANOM
+    CID_WR_TH, CID_WR_ALARM_CNT, CID_WR_RELEASE_CNT, CID_WR_NONE, CID_WR_WIN_ANOM,
+    CID_WR_NONE, CID_WR_NONE, CID_WR_NONE, CID_WR_NONE
 };
 
 /* FEAT-ESPGW-05：下行命令队列（单深度，新命令覆盖旧命令）
@@ -157,9 +160,11 @@ static bool master_snapshot_plausible(const sounddog_holding_t *p)
     return true;
 }
 
-/* 打印字段名（保持原有 CID#n NAME 的可读格式，便于与历史日志对照） */
+/* 打印字段名（保持原有 CID#n NAME 的可读格式，便于与历史日志对照）
+ * 前 5 项为可写参数，后 4 项为只读遥测（5..8）。 */
 static const char *const s_field_name[MASTER_PARAM_CNT] = {
-    "TH", "ALARM_CNT", "RELEASE_CNT", "WIN_LEN", "WIN_ANOM"
+    "TH", "ALARM_CNT", "RELEASE_CNT", "WIN_LEN", "WIN_ANOM",
+    "TEMP_C", "HUMI_RH", "VIB_RMS", "VIB_PEAK"
 };
 
 /* 从数据字典取字段实例指针（官方同款：param_offset 指向结构体字段） */

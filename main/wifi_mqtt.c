@@ -437,15 +437,25 @@ void gateway_mqtt_publish(const sounddog_holding_t *regs, uint16_t ok_count)
      * 已依赖 CONFIG_MQTT_SKIP_PUBLISH_IF_DISCONNECTED（sdkconfig.defaults 使能）
      * 由发布层在未连接时自动丢弃，不入队堆积（GW-05 周期不受影响）。 */
 
-    /* 5×Holding → JSON（字段名与 mb_param.h 语义一致）。
-     * P-4 残留-1：附 ok 成功读取数；上位机据此判断数据新鲜度（ok<5=部分成功混合快照）。 */
-    char payload[192];
+    /* 9×Holding → JSON（字段名与 mb_param.h 语义一致）。
+     * P-4 残留-1：附 ok 成功读取数；上位机据此判断数据新鲜度（ok<9=部分成功混合快照）。
+     * 5..8 为只读遥测：温度/湿度在【这里】做偏移与缩放换算，云端直接可读
+     *   （从站 reg5 = 温度×10 + 500 ⇒ 753 → 25.3℃；reg6 = 湿度×10 ⇒ 612 → 61.2）。
+     * ⚠️ 新增的 4 个键必须在 ThingsCloud「功能定义」里先建好同名属性，
+     *    否则平台按未定义键拒收（406），甚至断开连接。 */
+    char payload[256];
     int n = snprintf(payload, sizeof(payload),
                      "{\"th\":%u,\"alarm_cnt\":%u,\"release_cnt\":%u,"
-                     "\"win_len\":%u,\"win_anom\":%u,\"ok\":%u}",
+                     "\"win_len\":%u,\"win_anom\":%u,"
+                     "\"temp\":%.1f,\"humi\":%.1f,"
+                     "\"vib_rms\":%u,\"vib_peak\":%u,\"ok\":%u}",
                      (unsigned)regs->th, (unsigned)regs->alarm_cnt,
                      (unsigned)regs->release_cnt, (unsigned)regs->win_len,
-                     (unsigned)regs->win_anom, (unsigned)ok_count);
+                     (unsigned)regs->win_anom,
+                     ((double)(int32_t)regs->temp - SD_TEMP_OFFSET) / SD_TEMP_SCALE,
+                     (double)regs->humi / SD_HUMI_SCALE,
+                     (unsigned)regs->vib_rms, (unsigned)regs->vib_peak,
+                     (unsigned)ok_count);
     if (n < 0 || n >= (int)sizeof(payload)) {
         ESP_LOGE(TAG, "payload too long or snprintf error");
         return;

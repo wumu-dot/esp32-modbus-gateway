@@ -23,8 +23,8 @@
 /* ---- 从站地址（SoundDog 0x01）绝对常量 ---- */
 #define SD_DEVICE_ADDR          (0x01u)
 
-/* ---- 从站保持寄存器个数（5×Holding） ---- */
-#define MASTER_PARAM_CNT        (5u)
+/* ---- 从站保持寄存器个数（9×Holding，0..4 可写参数 + 5..8 只读遥测） ---- */
+#define MASTER_PARAM_CNT        (9u)
 
 /* ---- FEAT-ESPGW-04：数据字典【CID 个数】= 5 ----
  *   CID 0 = 整块读（5 个寄存器一次读完，01 03 00 00 00 05）
@@ -36,7 +36,9 @@
  *  - 写：从站 eMBRegHoldingCB 的整批写是【原子】的（任一越界 ⇒ 全批拒、保留旧值），
  *        且 WIN_LEN 固定拒写 ⇒ ⛔ 不能整块写 5 个，否则必定全批失败。
  * ⇒ 写必须逐字段、各用一个 CID。
- * MASTER_PARAM_CNT 仍为「寄存器个数(5)」，打印仍按 CID#n 逐字段输出。 */
+ * MASTER_PARAM_CNT 为「寄存器个数(9)」，打印按 CID#n 逐字段输出。
+ * ⚠️ 寄存器数扩展【不增加 CID】：5..8 是只读遥测，无写 CID，
+ *    所以 MASTER_CID_CNT 仍为 5（1 个整块读 + 4 个单寄存器写）。 */
 #define MASTER_CID_CNT          (5u)
 
 /* ---- 写用 CID（与寄存器号对应；WIN_LEN 无写 CID，属刻意缺失） ---- */
@@ -66,7 +68,11 @@
 #define STR(s) ((const char *)(s))
 
 /* ------------------------------------------------------------------ */
-/* 实例结构体：5×Holding，字段顺序与帧地址一一对应（字段顺序不可改）    */
+/* 实例结构体：9×Holding，字段顺序与帧地址一一对应（字段顺序不可改）    */
+/*   0..4 = 可写参数（FEAT-04 整块读 / FEAT-05 逐条写）                */
+/*   5..8 = 只读遥测（从站 MODBUS_REG_HOLDING_NUM 9u，写操作被 MB_ENOREG 拒）*/
+/*   ⚠️ HOLD_REG_START 的 (offsetof+1)>>1 技巧对 2 字节字段正好给出     */
+/*      0..8 的连续地址，新增字段必须仍为 uint16_t 且保持顺序。         */
 /* ------------------------------------------------------------------ */
 #pragma pack(push, 1)
 typedef struct {
@@ -75,11 +81,22 @@ typedef struct {
     uint16_t release_cnt;   /* 帧2 0x0002 连续正常帧→解除  1~100      */
     uint16_t win_len;       /* 帧3 0x0003 滑窗长 固定100 拒改        */
     uint16_t win_anom;      /* 帧4 0x0004 窗内异常帧阈值  1~100      */
+    uint16_t temp;          /* 帧5 0x0005 温度 ×10 + 500 偏移（只读） */
+                            /*          753 = 25.3℃；-45℃ → 50       */
+    uint16_t humi;          /* 帧6 0x0006 湿度 ×10（只读）612=61.2%RH */
+    uint16_t vib_rms;       /* 帧7 0x0007 振动 RMS (mg)（只读）       */
+                            /*          MPU6050 未接入前恒 0          */
+    uint16_t vib_peak;      /* 帧8 0x0008 振动峰值 (mg)（只读）同上   */
 } sounddog_holding_t;
 #pragma pack(pop)
 
-/* ---- 整块读的字节数：5×u16 = 10（mbc_master_set_param_data 以 param_size 为准） ---- */
+/* ---- 整块读的字节数：9×u16 = 18（mbc_master_set_param_data 以 param_size 为准） ---- */
 #define SD_HOLD_ALL_BYTES       (sizeof(sounddog_holding_t))
+
+/* ---- 遥测值换算（协议层的偏移/缩放只在这一处定义，勿在别处重复） ---- */
+#define SD_TEMP_OFFSET          (500)   /* 从站：reg5 = g_temp_x10 + 500 */
+#define SD_TEMP_SCALE           (10.0)  /* ×10 定点 */
+#define SD_HUMI_SCALE           (10.0)
 
 /* ---- 实例与字典表在 master_app.c 定义 ---- */
 extern sounddog_holding_t holding_regs;
