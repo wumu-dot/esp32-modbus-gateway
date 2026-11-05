@@ -28,7 +28,7 @@
 
 | 宏 | 值 | 语义 |
 |---|---|---|
-| `MASTER_PARAM_CNT` | `5u` | 从站保持寄存器个数（**两侧耦合**：从站 `MODBUS_REG_HOLDING_NUM` 必须一致） |
+| `MASTER_PARAM_CNT` | `9u` | 从站保持寄存器个数（**两侧耦合**：从站 `MODBUS_REG_HOLDING_NUM` 必须一致）。`0~4` 参数 + `5~8` 只读遥测（温/湿/振动 RMS/峰值） |
 | `MASTER_CID_CNT` | `5u` | 字典条目数 = 1 条整块读（CID 0）＋ 4 条单寄存器写（CID 1~4） |
 | `CID_READ_ALL` / `CID_WR_*` | 0 / 1~4 | **读整块、写单条**——⛔ 不可整块写（从站整批写原子 + `WIN_LEN` 拒写） |
 | `POLL_PERIOD_MS` | `1000u` | 轮询周期 |
@@ -70,7 +70,7 @@
 | RTOS | FreeRTOS（ESP-IDF 内置） |
 | 驱动库 | ESP-IDF v5.4 |
 | 编译构建 | CMake + `idf.py` + xtensa-esp32s3-elf-gcc |
-| 固定宏 | `MASTER_PARAM_CNT=5`、`POLL_PERIOD_MS=1000`、`UART2 115200 8N1`、`RTS=GPIO10` |
+| 固定宏 | `MASTER_PARAM_CNT=9`（**寄存器数**；`MASTER_CID_CNT=5` 不变——遥测项无写 CID）、`POLL_PERIOD_MS=1000`、`UART2 115200 8N1`、`RTS=GPIO10` |
 | 硬性边界 | 不改 `components/`/`managed_components/` 下 framework 文件；WiFi/MQTT 栈任务优先级不修改 |
 
 ### 🔴 构建环境（本机唯一可用路径，`T48` 环境指纹）

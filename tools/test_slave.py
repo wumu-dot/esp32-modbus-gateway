@@ -30,9 +30,32 @@ def test_read_zero_based(slave):
 def test_read_out_of_range_addr(slave):
     """读越界地址 → 异常 0x02。"""
     with pytest.raises(SdException):
-        slave.read_holdings(5, 1)
+        slave.read_holdings(9, 1)
     with pytest.raises(SdException):
-        slave.read_holdings(4, 2)   # 跨出 5 边界
+        slave.read_holdings(8, 2)   # 跨出 9 边界
+
+
+# ---- 5..8 只读遥测（2026-10-24 从站由 5 扩到 9） ----
+def test_read_telemetry_slice(slave):
+    """遥测 5..8 默认 500/0/0/0：温度存的是 ×10+500 偏移（500 ⇒ 0.0℃）。"""
+    assert slave.read_holdings(5, 4) == [500, 0, 0, 0]
+
+
+def test_read_telemetry_reflects_injected_values(slave):
+    """注入遥测后读回应实时反映（743 ⇒ 24.3℃、573 ⇒ 57.3%RH）。"""
+    slave.temp_x10 = 243      # 243+500 = 743
+    slave.humi_x10 = 573
+    slave.vib_rms = 128
+    slave.vib_peak = 256
+    assert slave.read_holdings(5, 4) == [743, 573, 128, 256]
+
+
+def test_telemetry_write_rejected(slave):
+    """写 5..8 → 异常 0x02（从站 reg_off_to_pid 落 default ⇒ MB_ENOREG），且不得改动参数。"""
+    with pytest.raises(SdException) as exc:
+        slave.write_holdings(5, [600])
+    assert exc.value.code == 0x02
+    assert slave.read_holdings(0, 5) == [600, 30, 60, 100, 30]   # 参数未被波及
 
 
 # ---- 写 0x10：合法写 → 参数生效 → 读回更新 ----

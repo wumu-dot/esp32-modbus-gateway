@@ -74,16 +74,16 @@ static int64_t s_last_mqtt_publish_us;
  *
  * 读（CID 0）
  *   RegStart      = HOLD_REG_START(th)      = 0x0000
- *   RegSize       = MASTER_PARAM_CNT        = 5（寄存器个数）
+ *   RegSize       = MASTER_PARAM_CNT        = 9（寄存器个数）
  *   InstanceOffset= HOLD_OFFSET(th)         = 1  ⇒ 指向 &holding_regs.th（= 结构体首字节）
- *   DataSize      = SD_HOLD_ALL_BYTES       = 10（读路径以 param_size 逐 u16 拷入，
+ *   DataSize      = SD_HOLD_ALL_BYTES       = 18（9×u16；读路径以 param_size 逐 u16 拷入，
  *                                              必须给字节数）
  *
  * 写（CID 1~4，FEAT-ESPGW-05）
  *   RegSize = 1，DataSize = PARAM_SIZE_U16 = 2
  *   ⚠️ 写路径的语义与读相反：set_parameter 先 calloc(mb_size<<1) 再把
  *      【param_size 字节】从实例拷进请求缓冲 ⇒ 单寄存器写必须给 2，⛔ 不是 10。
- *   ⚠️ 不能整块写 5 个：从站整批写是原子的（任一越界 ⇒ 全批拒），
+ *   ⚠️ 不能整块写 9 个：从站整批写是原子的（任一越界 ⇒ 全批拒），
  *      且 WIN_LEN 固定拒写 ⇒ 整块写必定全批失败。
  *   ⚠️ 寄存器 3（WIN_LEN）刻意【没有】写 CID。
  */
