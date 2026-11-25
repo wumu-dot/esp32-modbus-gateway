@@ -1,4 +1,16 @@
 #!/bin/sh
 # 本仓库 pre-commit 门禁（源码入库，安装方式见 README「本地门禁」）
-# 安装：cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#   1) R27 三源      —— 新增 .c/.h 里的新 API 调用无三源证据则拦
+#   2) DOC-STATE     —— CLAUDE.md 的 CHIP 与 sdkconfig 不一致则拦
+# 原则：只在失败时输出详情，正常提交保持安静。
+# 逃生口：git commit --no-verify，须在提交说明登记理由。
+
+PY="$(command -v python3 || command -v python || command -v py)"
+
 bash scripts/check_three_source.sh || exit 1
+
+if [ -n "$PY" ]; then
+    OUT=$("$PY" scripts/check_doc_drift.py --fail 2>&1) || { echo "$OUT"; exit 1; }
+else
+    echo "[hook] ⚠️ 未找到 python，跳过 DOC-STATE 检查" >&2
+fi
