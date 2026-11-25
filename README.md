@@ -211,6 +211,19 @@ CLAUDE.md             项目全局上下文（会话自动继承）
 
 ---
 
+## 本地门禁（pre-commit）
+
+`.git/hooks/` 不入版本库，换机后重建一次：
+
+```bash
+cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+当前挂载 **`scripts/check_three_source.sh`**（R27 三源门禁）：新增 `.c/.h` 里出现 `esp_` / `mqtt` / `xTask` 等新 API 调用，而本次 diff 中**没有**「三源 / issue / 坑清单」标记时，**拒绝提交**。
+
+> **已实测（2026-11-26）**：无标记 → 拦截（HEAD 不变）；补标记 → 放行。
+> 逃生口 `git commit --no-verify` 须在提交说明里登记理由。
+
 ## 已知遗留
 
 > ✅ **10-27 起三条历史拦路虎均已闭环**：`block_trim_free` 崩溃循环、B→A 方向未稳定、FEAT-04/05 未烧录。详细证据见 `在办总表` 与 `RS485与云端闭环复核报告-2026-10-27`。以下只列**当前仍存在**的问题。

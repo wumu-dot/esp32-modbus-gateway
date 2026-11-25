@@ -1,0 +1,4 @@
+#!/bin/sh
+# 本仓库 pre-commit 门禁（源码入库，安装方式见 README「本地门禁」）
+# 安装：cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+bash scripts/check_three_source.sh || exit 1
