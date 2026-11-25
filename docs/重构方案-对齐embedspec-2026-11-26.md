@@ -2,7 +2,7 @@
 
 - **日期**：2026-11-26
 - **出具**：审查官
-- **状态**：🟡 **P0/P1 已执行（2026-11-26）**（P0 `782a0e9`／P1 `1b7a8df`）；P2 未开始
+- **状态**：✅ **P0~P2 全部执行完毕（2026-11-26）**（P0 `782a0e9`／P1 `1b7a8df`／P2 `d94a421`+`a895beb`）
 - **边界**：**只重构"规则与文档治理"，不动 ESP-IDF 代码、不动 Modbus 字典、不动云端物模型。**
 - **母版**：`桌面\agent\embedspec`（template，已修 10 项悬空引用）
 
@@ -153,3 +153,23 @@ python scripts/check_rule_refs.py  || exit 1      # P1 产物，先留占位
 | 负例验证 | 把 CHIP 改成 `ESP32-C3` → 归一化 `esp32c3 vs esp32s3` 报不一致、`--fail` 退出 1；备份还原后 md5 一致、退出码回 0 |
 
 **P1 遗留**：未接进 pre-commit（属 P2）；`docs/spec/` 的 2 份 SoundDog 规格未处理（属 P2）。
+
+### P2 钩子扩到 2 项 + 规格归属澄清（2026-11-26，`d94a421` / `a895beb`）
+
+| 项 | 结果 |
+|---|---|
+| pre-commit | 1 项 → **2 项**（+`check_doc_drift.py --fail`）；源码 `scripts/git-hooks/pre-commit` 同步更新 |
+| 负例实测 | 把 CHIP 改成 `ESP32-C3` → 被第 2 项拦下，HEAD 停在 `fd16822`；还原后 md5 一致 |
+| 跨仓文档 | 🔴 **原判断被推翻**：两份 `SoundDog-传感器扩展规格-*.md` **只存在于本仓库**，SoundDog 是按路径引用，**没有副本** ⇒ 「两仓各存一份」不成立，**不迁移**（迁移会破坏 3 处引用且零收益） |
+| 实际处置 | `docs/INDEX.md` 两条条目加注「**唯一副本在此**：寄存器映射由主站定义，从站按此实现；⛔ SoundDog 侧不得另存副本」 |
+
+### AC-5 构建验证
+
+```
+export PATH=<xtensa-esp-elf bin>:$PATH      # 工具链不在 PATH，需手动加
+export IDF_PATH=/c/Espressif/v5.4/esp-idf
+cmake --build build -j4                      → EXIT=0
+esp32_modbus_gateway.bin  0xeefc0 (978,880 B)，app 分区剩 7%
+```
+
+**结论：AC-1~AC-6 全部通过**（AC-4 因前提更正而改了判据，见上）。
