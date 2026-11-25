@@ -184,8 +184,8 @@ def test_ack_matches_c_format():
 
 
 def test_ack_encodes_error_code():
-    """err 为 esp_err_t 原值：0=成功、0x102 参数非法、0x103 不支持、0x107 超时。"""
-    assert json.loads(build_ack(3, 100, 0x103)) == {"cid": 3, "value": 100, "err": 259}
+    """err 为 esp_err_t 原值：0=成功、0x102 参数非法、0x106 不支持、0x107 超时。"""
+    assert json.loads(build_ack(3, 100, 0x106)) == {"cid": 3, "value": 100, "err": 262}
     assert json.loads(build_ack(9, 0, 0x102)) == {"cid": 9, "value": 0, "err": 258}
     assert json.loads(build_ack(0, 65535, 0x107))["err"] == 0x107
 

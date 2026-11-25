@@ -61,7 +61,7 @@
 |---|---|---|---|
 | **K1** 用 `msg_id == 0` 判"完整报文" | 所有入站命令被误当分片丢弃，**功能完全不工作** | 分片判据只用 `current_data_offset == 0 && total_data_len == data_len` | AC-2：发一条命令必须打出 `cmd recv` |
 | **K2** 以为写路径 `param_size` 同读（给 10） | `set_param_data` 只从实例拷 **10 字节**，越界读相邻字段 ⇒ **写出去的是垃圾** | 写描述符 `DataSize = PARAM_SIZE_U16(2)` | AC-7：写后读回值 == 下发值 |
-| **K3** 整块写 5 个寄存器 | 从站整批写原子 + `WIN_LEN` 拒写 ⇒ **全批失败、一个都写不进** | 写用逐字段单寄存器 CID | AC-2/AC-4 |
+| **K3** 整块写 0~8（含只读遥测 5~8） | 从站整批写原子 + 遥测不可写 ⇒ **全批失败、一个都写不进** | 写用逐字段单寄存器 CID | AC-2/AC-4 |
 | **K4** MQTT 回调里直调主站 API | 违反 `GW-04`，与轮询任务并发 ⇒ 事务号错乱（正是 `§6bg` 的病根） | 回调**只入队**，`set_parameter` 只在 `poll_task` 调 | 代码走查 + 压测：连续发 10 条命令不出现跨事务丢弃 |
 | **K5** ack 缓冲也叫 `payload` | `test_payload_fmt_matches_c_source` 反查到 ack 那条 ⇒ **既有护栏误红** | 缓冲命名 `ack` | AC-8：`pytest tools/ -q` 全绿 |
 | **K6** 注释里写出 `snprintf(payload, sizeof(payload),` 原文 | 同上，正则匹配注释 ⇒ 护栏误红（**本次实际踩到**） | 注释不抄调用原文 | AC-8 |
@@ -123,10 +123,10 @@
 
 | # | 判据 | 期望 |
 |---|---|---|
-| **AC-1** | 串口出现 `subscribed 'esp32gw/sounddog/cmd'` | 通过 |
+| **AC-1** | 串口出现 `subscribed 'attributes/push'`（ThingsCloud 默认；旧自建 broker 为 `esp32gw/sounddog/cmd`） | 通过 |
 | **AC-2** | 发 `{"cid":0,"value":650}` ⇒ 串口 `cmd recv: cid=0 value=650` ＋ `cmd applied: reg 0 (TH) = 650` | 通过 |
-| **AC-3** | ack topic 收到 `{"cid":0,"value":650,"err":0}` | 通过 |
-| **AC-4** | 发 `{"cid":3,...}`（WIN_LEN）⇒ `err=0x103`（`ESP_ERR_NOT_SUPPORTED`），**不产生任何总线事务** | 通过 |
+| **AC-3** | 串口日志出现 `ack: cid=0 value=650 err=0 (local only, ThingsCloud has no ack topic)`；**不发布 ack**（发未声明键会被平台 406 拒收） | 通过 |
+| **AC-4** | 发 `{"cid":3,...}`（WIN_LEN）⇒ `err=0x106`（`ESP_ERR_NOT_SUPPORTED`；`0x103` 是 `ESP_ERR_INVALID_STATE`，勿混），**不产生任何总线事务** | 通过 |
 | **AC-5** | 发 `{"cid":9,...}` ⇒ `err=0x102`（`ESP_ERR_INVALID_ARG`） | 通过 |
 | **AC-6** | 发 `{"value":650}`（缺 cid）⇒ 串口 `cmd parse fail, drop` | 通过 |
 | **AC-7** | 写后下一轮读回该字段 = 新值 | 通过 |
