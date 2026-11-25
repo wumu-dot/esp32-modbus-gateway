@@ -2,7 +2,7 @@
 
 - **日期**：2026-11-26
 - **出具**：审查官
-- **状态**：🟡 **P0 已执行（2026-11-26，commit `782a0e9`）**；P1/P2 未开始
+- **状态**：🟡 **P0/P1 已执行（2026-11-26）**（P0 `782a0e9`／P1 `1b7a8df`）；P2 未开始
 - **边界**：**只重构"规则与文档治理"，不动 ESP-IDF 代码、不动 Modbus 字典、不动云端物模型。**
 - **母版**：`桌面\agent\embedspec`（template，已修 10 项悬空引用）
 
@@ -139,3 +139,14 @@ python scripts/check_rule_refs.py  || exit 1      # P1 产物，先留占位
 **意义**：`check_three_source.sh` 从"存在但从不运行"变成"每次提交都跑"。这是本项目此前最贵的一处空转。
 
 **遗留（P1 待做）**：DOC-STATE 校验器未建；`docs/spec/` 里 2 份 SoundDog 规格未处理。
+
+### P1 建 DOC-STATE 校验（2026-11-26，`1b7a8df`）
+
+| 项 | 结果 |
+|---|---|
+| 新增 `scripts/check_doc_drift.py` | 只做能可靠判定的：**CHIP 归一化比对**（`ESP32-S3(N16R8)` ↔ `CONFIG_IDF_TARGET="esp32s3"`） |
+| 未能校验的字段 | `FLASH` / `PSRAM`：**DOC-STATE 里根本没有这两个字段** ⇒ 只打印 sdkconfig 实际值（16MB / y / OCT=y）并 WARN 建议补充，**不 FAIL**（加字段是文档决策，不该由脚本替人决定） |
+| 显式声明未覆盖 | `RTOS` / `BUILD` / `TASKS` / `HSE` / `MIN_STACK` 逐项打印并标注「本版不校验」，避免误以为已覆盖 |
+| 负例验证 | 把 CHIP 改成 `ESP32-C3` → 归一化 `esp32c3 vs esp32s3` 报不一致、`--fail` 退出 1；备份还原后 md5 一致、退出码回 0 |
+
+**P1 遗留**：未接进 pre-commit（属 P2）；`docs/spec/` 的 2 份 SoundDog 规格未处理（属 P2）。
